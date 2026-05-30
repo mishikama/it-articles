@@ -1,0 +1,189 @@
+name: Pull Habr Article
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  pull-habr:
+    # Срабатывает только если:
+    # 1. Комментарий в PR (не в issue)
+    # 2. На PR висит лейбл pull-habr
+    # 3. В комментарии есть ссылка на habr.com
+    if: |
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, 'habr.com') &&
+      contains(join(github.event.issue.labels.*.name, ','), 'pull-habr')
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Extract Habr URL from comment
+        id: extract_url
+        run: |
+          COMMENT="${{ github.event.comment.body }}"
+          # Вытаскиваем URL habr.com из текста комментария
+          HABR_URL=$(echo "$COMMENT" | grep -oP 'https?://habr\.com/[^\s]+' | head -1)
+          if [ -z "$HABR_URL" ]; then
+            echo "❌ Ссылка на habr.com не найдена в комментарии"
+            exit 1
+          fi
+          echo "url=$HABR_URL" >> $GITHUB_OUTPUT
+          echo "✅ Найдена ссылка: $HABR_URL"
+
+      - name: Get PR branch name
+        id: pr_info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('branch', pr.data.head.ref);
+            core.setOutput('sha', pr.data.head.sha);
+            console.log(`Ветка PR: ${pr.data.head.ref}`);
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr_info.outputs.branch }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 markdownify --quiet
+
+      - name: Parse Habr article
+        id: parse
+        run: |
+          python3 << 'PYEOF'
+          import requests
+          import re
+          import sys
+          import os
+          from bs4 import BeautifulSoup
+          from markdownify import markdownify as md
+
+          url = os.environ["HABR_URL"]
+          print(f"Парсим: {url}")
+
+          headers = {
+              "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+              "Accept-Language": "ru-RU,ru;q=0.9",
+          }
+
+          resp = requests.get(url, headers=headers, timeout=30)
+          resp.raise_for_status()
+
+          soup = BeautifulSoup(resp.text, "html.parser")
+
+          # Заголовок статьи
+          title_tag = (
+              soup.find("h1", class_=re.compile(r"article.*title|tm-title")) or
+              soup.find("h1")
+          )
+          title = title_tag.get_text(strip=True) if title_tag else "Без заголовка"
+
+          # Автор
+          author_tag = soup.find(class_=re.compile(r"tm-user-info__username|article.*author"))
+          author = author_tag.get_text(strip=True) if author_tag else "Неизвестен"
+
+          # Основной контент статьи
+          content_tag = (
+              soup.find("div", class_=re.compile(r"article-formatted-body|tm-article-body")) or
+              soup.find("div", id=re.compile(r"post-content|article-content")) or
+              soup.find("article")
+          )
+
+          if not content_tag:
+              print("❌ Не удалось найти тело статьи")
+              sys.exit(1)
+
+          # Удаляем все картинки и медиа
+          for tag in content_tag.find_all(["img", "picture", "video", "audio", "source", "figure"]):
+              # figure удаляем только если внутри только img/picture
+              if tag.name == "figure":
+                  if not tag.find(["p", "blockquote", "ul", "ol", "pre"]):
+                      tag.decompose()
+              else:
+                  tag.decompose()
+
+          # Удаляем iframe (youtube, codepen и т.д.)
+          for tag in content_tag.find_all("iframe"):
+              tag.decompose()
+
+          # Конвертируем в Markdown
+          article_md = md(str(content_tag), heading_style="ATX", bullets="-")
+
+          # Убираем лишние пустые строки
+          article_md = re.sub(r"\n{3,}", "\n\n", article_md).strip()
+
+          # Формируем итоговый файл
+          safe_title = re.sub(r'[^\w\-а-яёА-ЯЁ ]', '', title)[:60].strip().replace(" ", "_")
+          filename = f"articles/{safe_title}.md"
+
+          os.makedirs("articles", exist_ok=True)
+
+          content = f"""---
+          source: {url}
+          title: "{title}"
+          author: "{author}"
+          mirror_date: "{__import__('datetime').date.today().isoformat()}"
+          ---
+
+          # {title}
+
+          > Автор: {author}
+          > Источник: {url}
+
+          ---
+
+          {article_md}
+          """
+
+          # Убираем лишние отступы из heredoc
+          import textwrap
+          content = textwrap.dedent(content)
+
+          with open(filename, "w", encoding="utf-8") as f:
+              f.write(content)
+
+          print(f"✅ Статья сохранена: {filename}")
+
+          # Передаём имя файла в следующий шаг
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh_out:
+              gh_out.write(f"filename={filename}\n")
+              gh_out.write(f"title={title}\n")
+
+          PYEOF
+        env:
+          HABR_URL: ${{ steps.extract_url.outputs.url }}
+
+      - name: Commit and push article
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add articles/
+          git diff --cached --quiet && echo "Нечего коммитить" && exit 0
+
+          git commit -m "mirror(habr): ${{ steps.parse.outputs.title }}"
+          git push origin ${{ steps.pr_info.outputs.branch }}
+          echo "✅ Изменения запушены в ветку ${{ steps.pr_info.outputs.branch }}"
+
+      - name: Comment on PR with result
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `✅ **Статья скопирована!**\n\n📄 Файл: \`${{ steps.parse.outputs.filename }}\`\n🔗 Источник: ${{ steps.extract_url.outputs.url }}`
+            });
