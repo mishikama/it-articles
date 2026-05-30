@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pr-1234
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "tenant-settings"
+  namespace: pr-1234
+data:
+  author: "mishikama"
+  environment: "dev"
+  db_name: "app_dev"
+  namespace: "pr-1234"
+  host: "pr-1234.dev.example.com"
+  branch: "feature_60530225_ai-integration"
+  image_prefix: "feature_60530225_ai_integration"
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: services
+  namespace: pr-1234
+spec:
+  dependsOn:
+    - name: postgres-operator
+      namespace: flux-system
+    - name: rabbitmq-operator
+      namespace: flux-system
+    - name: redis-operator
+      namespace: flux-system
+  interval: 1m
+  path: ./gitops/services/overlays/dev/_pr-template
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  targetNamespace: pr-1234
+  postBuild:
+    substitute:
+      namespace: pr-1234
+    substituteFrom:
+      - kind: ConfigMap
+        name: tenant-settings
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: app
+  namespace: pr-1234
+spec:
+  dependsOn:
+    - name: services
+  interval: 1m
+  path: ./gitops/apps/overlays/dev/previews/pr-1234
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  targetNamespace: pr-1234
+  postBuild:
+    substitute:
+      namespace: pr-1234
+    substituteFrom:
+      - kind: ConfigMap
+        name: tenant-settings

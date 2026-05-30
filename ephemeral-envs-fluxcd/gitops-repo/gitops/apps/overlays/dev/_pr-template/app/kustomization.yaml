@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../../base/app
+  - image-policy.yaml
+  - image-automation.yaml
+configMapGenerator:
+  - name: app-values-overrides
+    files:
+      - values.yaml=values.yaml
+patches:
+  - path: helmrelease-patch.yaml
+    target:
+      kind: HelmRelease
+      name: app

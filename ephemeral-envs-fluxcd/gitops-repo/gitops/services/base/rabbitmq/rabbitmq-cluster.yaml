@@ -1,0 +1,15 @@
+apiVersion: rabbitmq.com/v1beta1
+kind: RabbitmqCluster
+metadata:
+  name: rabbitmq
+spec:
+  image: docker.io/bitnamilegacy/rabbitmq:3.13.4-debian-12-r0
+  replicas: 1
+  override:
+    statefulSet:
+      spec:
+        template:
+          metadata:
+            labels:
+              app: rabbitmq
+              app.kubernetes.io/component: message-broker

@@ -1,0 +1,21 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: app
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: nixys
+  valuesFrom:
+    - kind: ConfigMap
+      name: app-values
+    - kind: ConfigMap
+      name: app-values-overrides
+  install:
+    remediation:
+      retries: 5
+  upgrade:
+    timeout: 15m
+    remediation:
+      retries: 5
