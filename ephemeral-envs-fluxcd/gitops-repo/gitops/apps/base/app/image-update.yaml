@@ -1,0 +1,9 @@
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageRepository
+metadata:
+  name: app
+spec:
+  image: cr.example.com/my-project/app
+  interval: 1m
+  secretRef:
+    name: docker-registry

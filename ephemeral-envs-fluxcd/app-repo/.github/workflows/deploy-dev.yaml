@@ -1,0 +1,187 @@
+name: Deploy Dev Ephemeral Environment
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, closed, synchronize, labeled, unlabeled]
+
+env:
+  APP_DB: ${{ vars.APP_DB }}
+  ENVIRONMENT: ${{ vars.ENVIRONMENT }}
+  PR_NUMBER: pr-${{ github.event.number }}
+  PR_AUTHOR: ${{ github.event.pull_request.user.login || github.actor }}
+  BRANCH: ${{ github.head_ref }}
+  FLUX_KS_FILE: gitops/clusters/dev/ephemeral/pr-${{ github.event.number }}.yaml # создается файл
+  GITOPS_DIR: gitops
+  INFRA_APP_EPHEM_DIR: gitops/apps/overlays/dev/previews/pr-${{ github.event.number }} # создается директория
+  INFRA_REPO: org/infra_repo
+
+jobs:
+  # пересобирается образ при каждом пуше в ветку PR
+  build:
+    if: |
+      github.event.action != 'closed' &&
+      github.event.action != 'unlabeled' &&
+      contains(github.event.pull_request.labels.*.name, 'deploy-dev')
+    uses: ./.github/workflows/build.yaml
+    with:
+      branch: ${{ github.head_ref }}
+    secrets: inherit
+
+  # создается окружение по лейблу deploy-dev
+  provision:
+    needs: [build]
+    if: github.event.action == 'labeled'
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      INFRA_SERVICES_DIR: gitops/services/overlays/dev/_pr-template
+      HOST: pr-${{ github.event.number }}.${{ vars.DOMAIN }}
+    steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v6
+
+      - name: Checkout gitops repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.INFRA_REPO }}
+          ssh-key: ${{ secrets.INFRA_SSH_KEY }}
+          ref: master
+          path: infra
+
+      - name: Generate ephemeral resources
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          IMAGE_PREFIX: ${{ needs.build.outputs.image_prefix }}
+        run: |
+          mkdir -p "infra/$INFRA_APP_EPHEM_DIR"
+
+          cat > "infra/${INFRA_APP_EPHEM_DIR}/values.yaml" <<EOF
+          defaultImageTag: ${IMAGE_TAG} # {"\$imagepolicy": "${PR_NUMBER}:app:tag"}
+          envs:
+            FOO: bar
+          EOF
+
+          cat > "infra/${INFRA_APP_EPHEM_DIR}/kustomization.yaml" <<EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+            - ../../_pr-template/app
+          configMapGenerator:
+            - name: app-values-ephemeral
+              files:
+                - values.yaml=values.yaml
+          EOF
+
+          cat > "infra/${FLUX_KS_FILE}" <<EOF
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: ${PR_NUMBER}
+          ---
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "tenant-settings"
+            namespace: ${PR_NUMBER}
+          data:
+            author: "${PR_AUTHOR}"
+            environment: "${ENVIRONMENT}"
+            db_name: "${APP_DB}"
+            namespace: "${PR_NUMBER}"
+            host: "${HOST}"
+            branch: "${BRANCH}"
+            image_prefix: "${IMAGE_PREFIX}"
+          ---
+          apiVersion: kustomize.toolkit.fluxcd.io/v1
+          kind: Kustomization
+          metadata:
+            name: services
+            namespace: ${PR_NUMBER}
+          spec:
+            dependsOn:
+              - name: postgres-operator
+                namespace: flux-system
+              - name: rabbitmq-operator
+                namespace: flux-system
+              - name: redis-operator
+                namespace: flux-system
+            interval: 1m
+            path: ./${INFRA_SERVICES_DIR}
+            prune: true
+            sourceRef:
+              kind: GitRepository
+              name: flux-system
+              namespace: flux-system
+            targetNamespace: ${PR_NUMBER}
+            postBuild:
+              substitute:
+                namespace: ${PR_NUMBER}
+              substituteFrom:
+                - kind: ConfigMap
+                  name: tenant-settings
+          ---
+          apiVersion: kustomize.toolkit.fluxcd.io/v1
+          kind: Kustomization
+          metadata:
+            name: app
+            namespace: ${PR_NUMBER}
+          spec:
+            dependsOn:
+              - name: services
+            interval: 1m
+            path: ./${INFRA_APP_EPHEM_DIR}
+            prune: true
+            sourceRef:
+              kind: GitRepository
+              name: flux-system
+              namespace: flux-system
+            targetNamespace: ${PR_NUMBER}
+            postBuild:
+              substitute:
+                namespace: ${PR_NUMBER}
+              substituteFrom:
+                - kind: ConfigMap
+                  name: tenant-settings
+          EOF
+
+      - name: Commit and push to infra
+        uses: ./.github/actions/gitops-commit
+        with:
+          dir_repository: infra/${{ env.GITOPS_DIR }}
+          commit_message: "feat: ephemeral env for ${{ env.PR_NUMBER }}"
+          pr_number: ${{ github.event.number }}
+          pr_message: "The ephemeral environment will be deployed soon: https://${{ env.HOST }}"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  teardown:
+    # Удаляется эфимерное окружение после закрытия PR или удаления лейбла
+    if: |
+      (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-dev') ||
+      (github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'deploy-dev'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v6
+
+      - name: Checkout gitops repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.INFRA_REPO }}
+          ssh-key: ${{ secrets.INFRA_SSH_KEY }}
+          ref: master
+          path: infra
+
+      - name: Remove ephemeral env
+        run: |
+          rm -f "infra/$FLUX_KS_FILE"
+          rm -rf "infra/$INFRA_APP_EPHEM_DIR"
+
+      - name: Commit and push to infra
+        uses: ./.github/actions/gitops-commit
+        with:
+          dir_repository: infra/${{ env.GITOPS_DIR }}
+          commit_message: "chore: remove ephemeral env for ${PR_NUMBER}"
+          pr_number: ${{ github.event.number }}
+          pr_message: "The ephemeral environment will be destroyed soon"
+          github_token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,63 @@
+envs:
+  APP_URL: https://${host}
+  APP_ENV: ${environment}
+  POSTGRES_DB: ${db_name}
+
+deployments:
+  main:
+    extraSelectorLabels:
+      app: app-main
+    initContainers:
+      - name: migration
+        args: ["rake", "db:migrate"]
+        envSecrets:
+          - db-credentials
+        envConfigmaps:
+          - envs
+    containers:
+      - name: main
+        args: ["app"]
+        ports:
+          - name: http
+            protocol: TCP
+            containerPort: 3000
+        startupProbe:
+          httpGet:
+            path: /api-docs/index.html
+            port: 3000
+            scheme: HTTP
+          initialDelaySeconds: 80
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 20
+        livenessProbe:
+          httpGet:
+            path: /api-docs/index.html
+            port: 3000
+            scheme: HTTP
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api-docs/index.html
+            port: 3000
+            scheme: HTTP
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+ingresses:
+  ${host}:
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt
+    hosts:
+      - paths:
+          - path: /
+            serviceName: main
+            servicePort: 80
+    extraTls:
+      - hosts:
+          - ${host}
+        secretName: ${host}-tls

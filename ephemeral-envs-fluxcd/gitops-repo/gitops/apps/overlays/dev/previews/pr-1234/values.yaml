@@ -1,0 +1,4 @@
+defaultImageTag: feature_60530225_ai_integration-9c4b85f-20260529072924 # {"$imagepolicy": "pr-1234:app:tag"}
+envs:
+  FOO: bar
+  SPECIAL_PR_1234_ENV: abracadabra

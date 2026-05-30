@@ -1,0 +1,73 @@
+name: Update Table of Contents
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-toc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate TOC
+        run: |
+          python3 <<'PYEOF'
+          import os, re
+
+          repo_root = os.getcwd()
+          readme_path = os.path.join(repo_root, "README.md")
+
+          # Collect articles: directories that contain a README.md
+          articles = []
+          for entry in sorted(os.listdir(repo_root)):
+              entry_path = os.path.join(repo_root, entry)
+              readme_candidate = os.path.join(entry_path, "README.md")
+              if os.path.isdir(entry_path) and os.path.isfile(readme_candidate):
+                  with open(readme_candidate, "r", encoding="utf-8") as f:
+                      content = f.read()
+                  # Extract title from first markdown heading
+                  m = re.search(r"^#\s+(.+)", content, re.MULTILINE)
+                  title = m.group(1).strip() if m else entry
+                  articles.append((title, entry))
+
+          # Sort alphabetically by title
+          articles.sort(key=lambda a: a[0].lower())
+
+          # Build markdown list
+          items = []
+          for title, dirname in articles:
+              items.append(f"- [{title}]({dirname}/)")
+
+          toc = "\n".join(items)
+
+          # Replace the block between markers in README.md
+          with open(readme_path, "r", encoding="utf-8") as f:
+              readme = f.read()
+
+          readme = re.sub(
+              r"<!-- TOC:START -->.*?<!-- TOC:END -->",
+              f"<!-- TOC:START -->\n{toc}\n<!-- TOC:END -->",
+              readme,
+              count=1,
+              flags=re.DOTALL,
+          )
+
+          with open(readme_path, "w", encoding="utf-8") as f:
+              f.write(readme)
+
+          print("TOC updated with", len(articles), "articles")
+          PYEOF
+
+      - name: Commit and push if changed
+        run: |
+          git diff --quiet README.md && echo "No changes" && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: update table of contents"
+          git push

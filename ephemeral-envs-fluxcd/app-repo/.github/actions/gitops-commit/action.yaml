@@ -1,0 +1,52 @@
+name: Gitops Commit
+description: Checkout infra repo, commit, push and comment PR
+
+inputs:
+  dir_repository:
+    description: 'Path to the repository directory'
+    required: true
+  commit_message:
+    description: 'Commit message'
+    required: true
+  pr_message:
+    description: 'Comment message for PR'
+    required: true
+  pr_number:
+    description: 'PR number to comment on'
+    required: false
+    default: ''
+  github_token:
+    description: 'GitHub token for commenting on PR'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Setup git
+      shell: bash
+      run: |
+        git -C "${{ inputs.dir_repository }}" config user.email "ci@github.com"
+        git -C "${{ inputs.dir_repository }}" config user.name "GitHub CI"
+
+    - name: Commit & push
+      shell: bash
+      run: |
+        cd "${{ inputs.dir_repository }}"
+        git add .
+        if git diff --cached --quiet; then
+          echo "No changes to commit"
+          exit 0
+        fi
+        git commit -m "${{ inputs.commit_message }}"
+        git push
+
+    - name: Comment PR
+      if: ${{ inputs.pr_number != '' && inputs.pr_message != '' }}
+      shell: bash
+      run: |
+        gh pr comment ${{ inputs.pr_number }} \
+          --body "${{ inputs.pr_message }}" \
+          --repo ${{ github.repository }}
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}

@@ -1,0 +1,21 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgresql
+spec:
+  instances: 1
+  bootstrap:
+    pg_basebackup:
+      source: app_dev
+  externalClusters:
+    - name: app_dev
+      connectionParameters:
+        host: postgresql-rw.dev
+        user: streaming_replica
+        port: "5432"
+        sslmode: disable
+      password:
+        name: db-streaming-credentials
+        key: POSTGRES_PASSWORD
+  storage:
+    size: 15Gi
