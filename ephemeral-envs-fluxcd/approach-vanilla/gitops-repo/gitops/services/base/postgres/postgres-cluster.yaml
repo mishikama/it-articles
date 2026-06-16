@@ -1,0 +1,19 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgresql
+spec:
+  imageName: ghcr.io/cloudnative-pg/postgresql:15.7
+  primaryUpdateStrategy: unsupervised
+
+  inheritedMetadata:
+    labels:
+      app: postgres
+      app.kubernetes.io/component: database
+
+  postgresql:
+    parameters:
+      timezone: "UTC"
+      max_connections: "250"
+      pg_stat_statements.track: all
+    shared_preload_libraries: []

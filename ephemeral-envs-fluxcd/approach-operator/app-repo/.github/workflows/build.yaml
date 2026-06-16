@@ -1,0 +1,63 @@
+name: Build
+
+on:
+  pull_request:
+    types: [synchronize, labeled]
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+
+env:
+  CR_REGISTRY: cr.example.com/my-project
+  CR_REPOSITORY: app
+
+jobs:
+  build:
+    if: contains(github.event.pull_request.labels.*.name, 'deploy-dev')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Add pause label (block deploy until image is ready)
+        if: github.event.action == 'labeled' && github.event.label.name == 'deploy-dev'
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --add-label "deploy-dev-pause"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.CR_REGISTRY }}
+          username: ${{ secrets.CR_USERNAME }}
+          password: ${{ secrets.CR_PASSWORD }}
+
+      - name: Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.CR_REGISTRY }}/${{ env.CR_REPOSITORY }}
+          tags: |
+            type=raw,value=${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/amd64
+
+      - name: Remove pause label (unblock deploy)
+        if: github.event.action == 'labeled' && github.event.label.name == 'deploy-dev'
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --remove-label "deploy-dev-pause"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
