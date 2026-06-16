@@ -1,0 +1,20 @@
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSetInputProvider
+metadata:
+  name: app-prs
+  namespace: app-preview
+  annotations:
+    fluxcd.controlplane.io/reconcile: "enabled"
+    fluxcd.controlplane.io/reconcileEvery: "1m"
+spec:
+  type: GitHubPullRequest
+  url: https://github.com/org/app
+  secretRef:
+    name: github-auth
+  filter:
+    labels:
+      - "deploy-dev"
+    limit: 6
+  skip:
+    labels:
+      - "deploy-dev-pause"

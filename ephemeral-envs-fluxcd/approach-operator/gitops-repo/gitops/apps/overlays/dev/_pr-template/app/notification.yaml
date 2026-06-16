@@ -1,0 +1,21 @@
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: github-pr-comment
+spec:
+  type: githubpullrequestcomment
+  address: https://github.com/org/app
+  secretRef:
+    name: github-dmp-token
+---
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Alert
+metadata:
+  name: github-pr-comment
+spec:
+  providerRef:
+    name: github-pr-comment
+  eventSeverity: info
+  eventSources:
+    - kind: HelmRelease
+      name: dmp

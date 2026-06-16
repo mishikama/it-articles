@@ -1,0 +1,85 @@
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSet
+metadata:
+  name: app-ephemeral-envs
+  namespace: flux-system
+spec:
+  inputsFrom:
+    - apiVersion: fluxcd.controlplane.io/v1
+      kind: ResourceSetInputProvider
+      name: app-prs
+  resourcesTemplate: |
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: pr-<< inputs.id >>
+    ---
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: tenant-settings
+      namespace: pr-<< inputs.id >>
+    data:
+      author: << inputs.author >>
+      id: << inputs.id | quote >>
+      namespace: pr-<< inputs.id >>
+      host: pr-<< inputs.id >>.example.com
+      branch: << inputs.branch | quote >>
+      sha: << inputs.sha | quote >>
+    ---
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: services
+      namespace: pr-<< inputs.id >>
+      annotations:
+        event.toolkit.fluxcd.io/change_request: << inputs.id | quote >>
+        event.toolkit.fluxcd.io/commit: << inputs.sha | quote >>
+    spec:
+      dependsOn:
+        - name: postgres-operator
+          namespace: flux-system
+        - name: rabbitmq-operator
+          namespace: flux-system
+        - name: redis-operator
+          namespace: flux-system
+      interval: 1m
+      path: ./gitops/services/overlays/dev/_pr-template
+      prune: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+        namespace: flux-system
+      targetNamespace: pr-<< inputs.id >>
+      postBuild:
+        substitute:
+          namespace: pr-<< inputs.id >>
+        substituteFrom:
+          - kind: ConfigMap
+            name: tenant-settings
+    ---
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: app
+      namespace: pr-<< inputs.id >>
+      annotations:
+        event.toolkit.fluxcd.io/change_request: << inputs.id | quote >>
+        event.toolkit.fluxcd.io/commit: << inputs.sha | quote >>
+    spec:
+      dependsOn:
+        - name: services
+      interval: 1m
+      path: ./gitops/apps/overlays/dev/previews/pr-<< inputs.id >>
+      prune: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+        namespace: flux-system
+      targetNamespace: pr-<< inputs.id >>
+      postBuild:
+        substitute:
+          namespace: pr-<< inputs.id >>
+        substituteFrom:
+          - kind: ConfigMap
+            name: tenant-settings

@@ -1,0 +1,38 @@
+generic:
+  extraImagePullSecrets:
+    - name: docker-registry
+
+deploymentsGeneral:
+  envConfigmaps:
+    - envs
+  envSecrets:
+    - db-credentials
+    - redis-credentials
+    - rmq-credentials
+
+pdbs:
+  main:
+    minAvailable: 1
+    labels:
+      app: app-main
+    extraSelectorLabels:
+      app: app-main
+
+hooks:
+  migration-up:
+    containers:
+      - args: ["rake", "db:migrate"]
+        envSecrets:
+          - db-credentials
+        envConfigmaps:
+          - envs
+
+services:
+  main:
+    extraSelectorLabels:
+      app: app-main
+    ports:
+      - name: http
+        protocol: TCP
+        port: 80
+        targetPort: http

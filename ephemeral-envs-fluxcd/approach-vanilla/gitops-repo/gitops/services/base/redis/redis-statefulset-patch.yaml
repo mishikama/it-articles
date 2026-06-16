@@ -1,0 +1,9 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-standalone
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: cache
